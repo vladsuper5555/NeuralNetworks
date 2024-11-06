@@ -1,4 +1,5 @@
 import pip
+import cProfile
 def install(package):
     pip.main(['install', package])
 
@@ -38,16 +39,15 @@ import numpy as np
 def sigmoid(z):
     return 1 / (1 + np.exp(-z))
 
-def sigmoid_derivative(z):
-    return sigmoid(z) * (1 - sigmoid(z))
+def sigmoid_derivative(sigmoid_output):
+    return sigmoid_output * (1 - sigmoid_output)
 
 def softmax(z):
-    z_stable = z - np.max(z)  # for numerical stability
+    z_stable = z - np.max(z)
     exp_values = np.exp(z_stable)
     return exp_values / np.sum(exp_values)
 
 def cross_entropy_loss(predicted, target):
-    # Use small epsilon to prevent log(0)
     epsilon = 1e-12
     predicted = np.clip(predicted, epsilon, 1 - epsilon)
     return -np.sum(target * np.log(predicted))
@@ -65,7 +65,6 @@ class Layer:
     def forwardPropagation(self, inputs):
         self.z_values = (self.weights @ inputs) + self.bias
         
-        # Apply the activation function
         if self.is_output:
             self.activations = softmax(self.z_values)
         else:
@@ -76,26 +75,22 @@ class Layer:
         if self.is_output:
             dz = error
         else:
-            dz = error * sigmoid_derivative(self.z_values)
+            dz = error * sigmoid_derivative(sigmoid(self.z_values))
 
         return dz
 
 # Define network architecture
-input_size = 784  # Number of input features
-layer_sizes = [100]  # Sizes of each layer
-output_size = 10  # Number of output classes
+input_size = 784  
+layer_sizes = [100]
+output_size = 10
 
-# Initialize layers as a list of Layer objects
 layers = []
 
-# Input layer to first hidden layer
 layers.append(Layer(input_size, layer_sizes[0]))
 
-# Hidden layers
 for i in range(0, len(layer_sizes)):
     layers.append(Layer(layer_sizes[i - 1], layer_sizes[i]))
 
-# Output layer
 layers.append(Layer(layer_sizes[-1], output_size, is_output=True))
 
 
@@ -104,7 +99,6 @@ LEARNING_RATE = 0.01
 EPOCH_NUMBER = 100
 
 
-from concurrent.futures import ThreadPoolExecutor
 # def runBatch(np_batch_train_dataset):
 #     batch_size = np_batch_train_dataset[0].shape[0]
 #     num_classes = output_size
@@ -160,30 +154,25 @@ def runBatch(np_batch_train_dataset):
     batch_size = np_batch_train_dataset[0].shape[0]
     num_classes = output_size
 
-    # Initialize accumulators for gradients and biases
     gradients_accumulated = [np.zeros_like(layer.weights) for layer in layers]
     bias_accumulated = [np.zeros_like(layer.bias) for layer in layers]
-    batch_correct = 0
+    # batch_correct = 0
 
-    # Sequentially process each sample in the batch
     for testIndex in range(batch_size):
         activations = np_batch_train_dataset[0][testIndex]
-        for perceptron in layers:
-            activations = perceptron.forwardPropagation(activations)
+        for layer in layers:
+            activations = layer.forwardPropagation(activations)
         
         softMaxArray = activations
         correctPredictionValue = np_batch_train_dataset[1][testIndex]
         targetArray = np.zeros(num_classes)
         targetArray[correctPredictionValue] = 1
-        is_correct = int(correctPredictionValue == np.argmax(softMaxArray))
+        # is_correct = int(correctPredictionValue == np.argmax(softMaxArray))
         
-        # Update batch correct count
-        batch_correct += is_correct
+        # batch_correct += is_correct
 
-        # Calculate error for backpropagation
         errorArray = softMaxArray - targetArray
 
-        # Accumulate gradients and biases for each layer
         for i in reversed(range(len(layers))):
             if i == 0:
                 continue
@@ -193,15 +182,15 @@ def runBatch(np_batch_train_dataset):
             bias_accumulated[i] += dz
             errorArray = layer.weights.T @ dz
 
-    # Return accumulated gradients and biases, and count of correct predictions
-    return gradients_accumulated, bias_accumulated, batch_correct
+    # return [g / batch_size for g in gradients_accumulated], [b / batch_size for b in bias_accumulated]
+    # return gradients_accumulated, bias_accumulated, batch_correct
+    return gradients_accumulated, bias_accumulated
 
 
 
 def runEpoch(batch_size=100):
     total_samples = np_train_dataset[0].shape[0]
     batch_count = total_samples // batch_size
-    total_loss = 0
     total_correct = 0
 
     for batchIndex in range(batch_count):
@@ -211,20 +200,13 @@ def runEpoch(batch_size=100):
                                np_train_dataset[1][batch_start:batch_end]]
 
         # Run forward and backward pass for batch
-        gradients_accumulated, bias_accumulated, batch_correct = runBatch(batch_train_dataset)
+        gradients_accumulated, bias_accumulated = runBatch(batch_train_dataset)
 
-        # Update weights and biases for each perceptron
         for i, layer in enumerate(layers):
-            # print ("layer " + str(i))
-            # print(" gradients: ")
-            # print(gradients_accumulated[i])
-            # print("weghts: ")
-            # print(layers[i].weights)
-            # time.sleep(2)
             layer.weights -= LEARNING_RATE * gradients_accumulated[i]
             layer.bias -= LEARNING_RATE * bias_accumulated[i]
 
-        total_correct += batch_correct
+        # total_correct += batch_correct
 
     # avg_loss = total_loss / batch_count
     # accuracy = total_correct / total_samples
@@ -239,16 +221,32 @@ def runTest(inputs):
     max_index = np.argmax(activations)
     return max_index
 
-def main ():
+import time
+
+def main():
     for epochIndex in range(EPOCH_NUMBER):
+        # Time the runEpoch function
+        start_time = time.time()
         totalCorrect = runEpoch()
-        print('trainingAccuracy = ', totalCorrect, (np_train_dataset[0].size // (28 * 28)), totalCorrect / (np_train_dataset[0].size // (28 * 28)))
+        epoch_duration = time.time() - start_time
+        print(f"Epoch {epochIndex + 1} training time: {epoch_duration:.2f} seconds")
+
+        # Time the testing phase
+        start_time = time.time()
         correctlyPredicted = 0
         tests = np_test_dataset[0]
         correctPredictions = np_test_dataset[1]
+
         for index in range(tests.size // (28 * 28)):
             prediction = runTest(tests[index])
             if prediction == correctPredictions[index]:
                 correctlyPredicted += 1
-        print('Accuracy on tests at epoch ' + str(epochIndex) + " : " + str(correctlyPredicted / (tests.size // (28 * 28))))
+
+        test_duration = time.time() - start_time
+        test_accuracy = correctlyPredicted / (tests.size // (28 * 28))
+        print(f"Accuracy on tests at epoch {epochIndex + 1}: {test_accuracy:.4f}")
+        print(f"Testing time: {test_duration:.2f} seconds\n")
+
 main()
+
+# cProfile.run('main()')
