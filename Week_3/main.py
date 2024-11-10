@@ -1,40 +1,36 @@
 import pip
-import cProfile
+import tkinter as tk
+import numpy as np
+from PIL import Image, ImageDraw
+from io import BytesIO
+
 def install(package):
     pip.main(['install', package])
 
 try:
     from torchvision.datasets import MNIST
-    print("module 'mutagen' is installed")
+    print("module 'torchvision' is installed")
 except ModuleNotFoundError:
-    print("module 'torchvsion' is not installed")
-    # or
-    install("torchvision") # the install function from the question
+    print("module 'torchvision' is not installed")
+    install("torchvision")
 
 import numpy as np
 from torchvision.datasets import MNIST
-train_dataset = None
-test_dataset = None
+import time
+
 def download_mnist(is_train: bool):
-    if is_train == True:
-        return MNIST(root='./data', transform=lambda x: np.array(x).flatten(), download=True, train=is_train)
-    else: 
-        return MNIST(root='./data', transform=lambda x: np.array(x).flatten(), download=True, train=is_train)
+    return MNIST(root='./data', download=True, train=is_train)
 
 train_dataset = download_mnist(True)
 test_dataset = download_mnist(False)
 
 def processData(dataset):
-    np_dataset_images = np.array([object[0] for object in dataset], dtype = np.bool_).reshape(len(dataset), 28 * 28)
-    np_dataset_labels = np.array([object[1] for object in dataset], dtype = np.uint8)
-    
-    return np_dataset_images, np_dataset_labels
+    images = np.array([np.array(img, dtype=np.float32).flatten() for img, _ in dataset]) / 255.0
+    labels = np.array([label for _, label in dataset], dtype=np.uint8)
+    return images, labels
 
 np_train_dataset = processData(train_dataset)
 np_test_dataset = processData(test_dataset)
-
-
-import numpy as np
 
 def sigmoid(z):
     return 1 / (1 + np.exp(-z))
@@ -45,12 +41,7 @@ def sigmoid_derivative(sigmoid_output):
 def softmax(z):
     z_stable = z - np.max(z)
     exp_values = np.exp(z_stable)
-    return exp_values / np.sum(exp_values)
-
-def cross_entropy_loss(predicted, target):
-    epsilon = 1e-12
-    predicted = np.clip(predicted, epsilon, 1 - epsilon)
-    return -np.sum(target * np.log(predicted))
+    return exp_values / np.sum(exp_values, axis=1, keepdims=True)
 
 class Layer:
     def __init__(self, previousLayerNumberOfNeurons, numberOfNeurons, is_output=False):
@@ -58,13 +49,13 @@ class Layer:
         # Xavier initialization
         limit = np.sqrt(6 / (previousLayerNumberOfNeurons + numberOfNeurons))
         self.weights = np.random.uniform(-limit, limit, (numberOfNeurons, previousLayerNumberOfNeurons))
-        self.bias = np.zeros(numberOfNeurons)
+        self.bias = np.zeros((numberOfNeurons, 1))
         self.activations = None
         self.z_values = None
 
     def forwardPropagation(self, inputs):
-        self.z_values = (self.weights @ inputs) + self.bias
-        
+        self.inputs = inputs  # Save inputs for backward pass
+        self.z_values = inputs @ self.weights.T + self.bias.T
         if self.is_output:
             self.activations = softmax(self.z_values)
         else:
@@ -73,180 +64,207 @@ class Layer:
 
     def backwardPropagation(self, error):
         if self.is_output:
-            dz = error
+            dz = error  # For softmax with cross-entropy loss
         else:
-            dz = error * sigmoid_derivative(sigmoid(self.z_values))
-
+            dz = error * sigmoid_derivative(self.activations)
         return dz
 
-# Define network architecture
 input_size = 784  
 layer_sizes = [100]
 output_size = 10
 
 layers = []
+previous_layer_size = input_size
 
-layers.append(Layer(input_size, layer_sizes[0]))
+for size in layer_sizes:
+    layers.append(Layer(previous_layer_size, size))
+    previous_layer_size = size
 
-for i in range(0, len(layer_sizes)):
-    layers.append(Layer(layer_sizes[i - 1], layer_sizes[i]))
+layers.append(Layer(previous_layer_size, output_size, is_output=True))
 
-layers.append(Layer(layer_sizes[-1], output_size, is_output=True))
+LEARNING_RATE = 0.09
+EPOCH_NUMBER = 50
+BATCH_SIZE = 100
+DECAY_FACTOR = 0.5
+PATIENCE = 5
+MIN_DELTA = 0.001
+MIN_LR = 1e-5 
 
-
-
-LEARNING_RATE = 0.01
-EPOCH_NUMBER = 100
-
-
-# def runBatch(np_batch_train_dataset):
-#     batch_size = np_batch_train_dataset[0].shape[0]
-#     num_classes = output_size
-
-#     # Initialize accumulators for gradients and biases
-#     gradients_accumulated = [np.zeros_like(layer.weights) for layer in layers]
-#     bias_accumulated = [np.zeros_like(layer.bias) for layer in layers]
-#     batch_correct = 0
-
-#     # Function to compute forward pass and error for a single sample
-#     def process_sample(testIndex):
-#         activations = np_batch_train_dataset[0][testIndex]
-#         for perceptron in layers:
-#             activations = perceptron.forwardPropagation(activations)
-        
-#         softMaxArray = activations
-#         correctPredictionValue = np_batch_train_dataset[1][testIndex]
-#         targetArray = np.zeros(num_classes)
-#         targetArray[correctPredictionValue] = 1
-#         is_correct = int(correctPredictionValue == np.argmax(softMaxArray))
-        
-#         # Return error for backpropagation
-#         errorArray = softMaxArray - targetArray
-#         return errorArray, is_correct
-
-#     # Run forward pass in parallel and gather errors and results
-#     with ThreadPoolExecutor() as executor:
-#         results = list(executor.map(process_sample, range(batch_size)))
-
-#     # Accumulate errors for each sample and update batch loss and correct count
-#     for errorArray, is_correct in results:
-#         batch_correct += is_correct
-
-#         # Backpropagation: accumulate gradients and biases for each layer
-#         for i in reversed(range(len(layers))):
-#             if i == 0:
-#                 continue
-#             layer = layers[i]
-#             dz = layer.backwardPropagation(errorArray)
-#             gradients_accumulated[i] += np.outer(dz, layers[i - 1].activations)
-
-#             bias_accumulated[i] += dz
-#             errorArray = layer.weights.T @ dz
-
-#     # Average the accumulated gradients and biases over the batch size
-#     # gradients_accumulated = [grad / batch_size for grad in gradients_accumulated]
-#     # bias_accumulated = [bias / batch_size for bias in bias_accumulated]
-
-#     return gradients_accumulated, bias_accumulated, batch_correct
+best_train_accuracy = 0
+epochs_without_improvement = 0
 
 
 def runBatch(np_batch_train_dataset):
     batch_size = np_batch_train_dataset[0].shape[0]
     num_classes = output_size
 
+    activations = np_batch_train_dataset[0]
+    for layer in layers:
+        activations = layer.forwardPropagation(activations)
+
+    softmax_output = activations
+
+    targetArray = np.zeros((batch_size, num_classes))
+    targetArray[np.arange(batch_size), np_batch_train_dataset[1]] = 1
+
+    errorArray = softmax_output - targetArray
+
     gradients_accumulated = [np.zeros_like(layer.weights) for layer in layers]
     bias_accumulated = [np.zeros_like(layer.bias) for layer in layers]
-    # batch_correct = 0
 
-    for testIndex in range(batch_size):
-        activations = np_batch_train_dataset[0][testIndex]
-        for layer in layers:
-            activations = layer.forwardPropagation(activations)
-        
-        softMaxArray = activations
-        correctPredictionValue = np_batch_train_dataset[1][testIndex]
-        targetArray = np.zeros(num_classes)
-        targetArray[correctPredictionValue] = 1
-        # is_correct = int(correctPredictionValue == np.argmax(softMaxArray))
-        
-        # batch_correct += is_correct
+    dz = errorArray
 
-        errorArray = softMaxArray - targetArray
+    for i in reversed(range(len(layers))):
+        layer = layers[i]
+        dz = layer.backwardPropagation(dz)
+        inputs = layer.inputs
+        gradients_accumulated[i] = dz.T @ inputs / batch_size
+        bias_accumulated[i] = np.mean(dz, axis=0, keepdims=True).T
+        if i > 0:
+            dz = dz @ layer.weights  # backpropagate error
 
-        for i in reversed(range(len(layers))):
-            if i == 0:
-                continue
-            layer = layers[i]
-            dz = layer.backwardPropagation(errorArray)
-            gradients_accumulated[i] += np.outer(dz, layers[i - 1].activations)
-            bias_accumulated[i] += dz
-            errorArray = layer.weights.T @ dz
-
-    # return [g / batch_size for g in gradients_accumulated], [b / batch_size for b in bias_accumulated]
-    # return gradients_accumulated, bias_accumulated, batch_correct
     return gradients_accumulated, bias_accumulated
 
-
-
-def runEpoch(batch_size=100):
+def runEpoch():
     total_samples = np_train_dataset[0].shape[0]
-    batch_count = total_samples // batch_size
-    total_correct = 0
+    indices = np.arange(total_samples)
+    # np.random.shuffle(indices)
+    shuffled_images = np_train_dataset[0][indices]
+    shuffled_labels = np_train_dataset[1][indices]
+
+    batch_count = total_samples // BATCH_SIZE
 
     for batchIndex in range(batch_count):
-        batch_start = batchIndex * batch_size
-        batch_end = (batchIndex + 1) * batch_size
-        batch_train_dataset = [np_train_dataset[0][batch_start:batch_end], 
-                               np_train_dataset[1][batch_start:batch_end]]
+        batch_start = batchIndex * BATCH_SIZE
+        batch_end = (batchIndex + 1) * BATCH_SIZE
+        batch_train_dataset = [shuffled_images[batch_start:batch_end],
+                               shuffled_labels[batch_start:batch_end]]
 
         # Run forward and backward pass for batch
         gradients_accumulated, bias_accumulated = runBatch(batch_train_dataset)
 
+        # Update weights and biases
         for i, layer in enumerate(layers):
             layer.weights -= LEARNING_RATE * gradients_accumulated[i]
             layer.bias -= LEARNING_RATE * bias_accumulated[i]
 
-        # total_correct += batch_correct
-
-    # avg_loss = total_loss / batch_count
-    # accuracy = total_correct / total_samples
-
-    # return avg_loss, accuracy
-    return total_correct
-
-def runTest(inputs):
-    activations = inputs
-    for i, perceptron in enumerate(layers):
-        activations = perceptron.forwardPropagation(activations)
-    max_index = np.argmax(activations)
-    return max_index
-
-import time
-
 def main():
+    global LEARNING_RATE, best_train_accuracy, epochs_without_improvement
     for epochIndex in range(EPOCH_NUMBER):
-        # Time the runEpoch function
         start_time = time.time()
-        totalCorrect = runEpoch()
+        runEpoch()
         epoch_duration = time.time() - start_time
         print(f"Epoch {epochIndex + 1} training time: {epoch_duration:.2f} seconds")
 
-        # Time the testing phase
-        start_time = time.time()
-        correctlyPredicted = 0
-        tests = np_test_dataset[0]
-        correctPredictions = np_test_dataset[1]
+        train_activations = np_train_dataset[0]
+        correct_train_labels = np_train_dataset[1]
+        correctlyPredicted_train = 0
 
-        for index in range(tests.size // (28 * 28)):
-            prediction = runTest(tests[index])
-            if prediction == correctPredictions[index]:
-                correctlyPredicted += 1
+        for layer in layers:
+            train_activations = layer.forwardPropagation(train_activations)
+
+        train_predictions = np.argmax(train_activations, axis=1)
+        correctlyPredicted_train += np.sum(train_predictions == correct_train_labels)
+
+        train_accuracy = correctlyPredicted_train / np_train_dataset[0].shape[0]
+        train_error = 1 - train_accuracy
+        print(f"Training accuracy at epoch {epochIndex + 1}: {train_accuracy:.4f}")
+
+        if train_accuracy > best_train_accuracy + MIN_DELTA:
+            best_train_accuracy = train_accuracy
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= PATIENCE:
+            if LEARNING_RATE > MIN_LR:
+                LEARNING_RATE *= DECAY_FACTOR
+                LEARNING_RATE = max(LEARNING_RATE, MIN_LR)  # Ensure LR does not go below MIN_LR
+                print(f"Learning rate decayed to {LEARNING_RATE:.6f}")
+            epochs_without_improvement = 0  # Reset counter after adjusting learning rate
+
+
+
+
+        # Testing
+        start_time = time.time()
+        tests = np_test_dataset[0]
+        correctLabels = np_test_dataset[1]
+        correctlyPredicted = 0
+
+        activations = tests
+        for layer in layers:
+            activations = layer.forwardPropagation(activations)
+
+        predictions = np.argmax(activations, axis=1)
+        correctlyPredicted += np.sum(predictions == correctLabels)
 
         test_duration = time.time() - start_time
-        test_accuracy = correctlyPredicted / (tests.size // (28 * 28))
+        test_accuracy = correctlyPredicted / tests.shape[0]
         print(f"Accuracy on tests at epoch {epochIndex + 1}: {test_accuracy:.4f}")
         print(f"Testing time: {test_duration:.2f} seconds\n")
 
-main()
+class DrawingApp:
+    def __init__(self, root, model_layers):
+        self.root = root
+        self.model_layers = model_layers
+        self.root.title("Draw a Digit")
+        self.root.geometry("280x330")
+        self.canvas = tk.Canvas(self.root, bg="black", width=280, height=280)
+        self.canvas.pack()
 
-# cProfile.run('main()')
+        # Buttons for actions
+        self.button_frame = tk.Frame(self.root)
+        self.button_frame.pack()
+        self.clear_button = tk.Button(self.button_frame, text="Clear", command=self.clear_canvas)
+        self.clear_button.grid(row=0, column=0, padx=5, pady=5)
+        self.predict_button = tk.Button(self.button_frame, text="Predict", command=self.predict_digit)
+        self.predict_button.grid(row=0, column=1, padx=5, pady=5)
+
+        self.canvas.bind("<B1-Motion>", self.paint)
+
+        # To store drawn paths
+        self.image = Image.new("L", (280, 280), 0)  # 'L' mode for grayscale
+        self.draw = ImageDraw.Draw(self.image)
+
+    def paint(self, event):
+        thickness = 6
+        if not hasattr(self, 'last_x') or self.last_x == None:
+            self.last_x, self.last_y = event.x, event.y
+
+        # Draw a line between the last point and current position
+        self.canvas.create_line(self.last_x, self.last_y, event.x, event.y, fill="white", width=thickness)
+        self.draw.line([self.last_x, self.last_y, event.x, event.y], fill=255, width=thickness)
+
+        # Update last point to the current one
+        self.last_x, self.last_y = event.x, event.y
+        def reset_last_x(event):
+            self.last_x = None
+
+        self.canvas.bind("<ButtonRelease-1>", reset_last_x)
+
+
+    def clear_canvas(self):
+        self.canvas.delete("all")
+        self.draw.rectangle([0, 0, 280, 280], fill=0)
+        self.last_x = None
+
+    def predict_digit(self):
+        # Resize to 28x28 and flatten the image
+        resized_image = self.image.resize((28, 28), Image.LANCZOS)
+        image_data = np.array(resized_image, dtype=np.float32).reshape(784) / 255.0
+        resized_image.show()
+        # Pass through the model
+        activations = image_data
+        for layer in self.model_layers:
+            activations = layer.forwardPropagation(activations)
+
+        # Get prediction
+        prediction = np.argmax(activations, axis=1)
+        print(f"Predicted Digit: {prediction[0]} Confidence: {activations[0][prediction[0]]} \n All confidence: {activations[0]}")
+
+if __name__ == "__main__":
+    main()
+    root = tk.Tk()
+    app = DrawingApp(root, layers)  # 'layers' is from your existing neural network model
+    root.mainloop()
