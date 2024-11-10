@@ -140,10 +140,8 @@ def runEpoch():
         batch_train_dataset = [shuffled_images[batch_start:batch_end],
                                shuffled_labels[batch_start:batch_end]]
 
-        # Run forward and backward pass for batch
         gradients_accumulated, bias_accumulated = runBatch(batch_train_dataset)
 
-        # Update weights and biases
         for i, layer in enumerate(layers):
             layer.weights -= LEARNING_RATE * gradients_accumulated[i]
             layer.bias -= LEARNING_RATE * bias_accumulated[i]
@@ -179,9 +177,9 @@ def main():
         if epochs_without_improvement >= PATIENCE:
             if LEARNING_RATE > MIN_LR:
                 LEARNING_RATE *= DECAY_FACTOR
-                LEARNING_RATE = max(LEARNING_RATE, MIN_LR)  # Ensure LR does not go below MIN_LR
+                LEARNING_RATE = max(LEARNING_RATE, MIN_LR)  
                 print(f"Learning rate decayed to {LEARNING_RATE:.6f}")
-            epochs_without_improvement = 0  # Reset counter after adjusting learning rate
+            epochs_without_improvement = 0  
 
 
 
